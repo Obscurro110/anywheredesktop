@@ -1857,6 +1857,17 @@ async function routePhoneChat(msg) {
       if (op === 'skill-toggle' || op === 'skill-delete' || op === 'skill-save') {
         const id = String(body.id || '').trim()
         if (!id) return fail('id_required')
+        // ⚠️ 安全：id 来自手机，绝不允许路径分隔符 / 上跳，防止目录穿越
+        // （底层 getSkillDetails/deleteSkill/saveSkill 也已做 resolve 前缀校验，
+        //  这里是更早、更明确的一道防线）
+        if (
+          id.length > 64 ||
+          /[\/\\]/.test(id) ||
+          id.includes('..') ||
+          /[\u0000-\u001f]/.test(id)
+        ) {
+          return fail('id_invalid')
+        }
         const cfgRes = await (ctx?.dataApi?.getConfig?.() || Promise.resolve(null))
         const skillPath = cfgRes?.config?.skillPath || ''
         if (!skillPath) return fail('skill_dir_not_configured')

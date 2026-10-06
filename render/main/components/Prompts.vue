@@ -961,8 +961,11 @@ async function refreshPromptsConfig() {
                   :title="t('prompts.deletePrompt')" />
               </div>
             </div>
-            <div class="prompt-description-container" @click="prepareEditPrompt(item.key, activeTabName)"
-              v-html="formatDescription(item.prompt)"></div>
+            <!-- ⚠️ 安全：description 是纯文本，绝不能用 v-html。
+                 prompt 字段可由手机端 relay（caps-edit/prompt-save）写入，
+                 用 v-html 会导致存储型 XSS。改用文本插值。 -->
+            <div class="prompt-description-container" @click="prepareEditPrompt(item.key, activeTabName)">{{
+              formatDescription(item.prompt) }}</div>
           </div>
         </div>
       </div>

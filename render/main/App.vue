@@ -732,7 +732,13 @@ const fetchAndParseDoc = async (filename) => {
       return `![${alt}](${imgBaseUrl}${encodeURIComponent(imgFilename)})`;
     });
 
-    currentDocContent.value = marked.parse(text);
+    // ⚠️ 安全：文档内容来自远端（raw.githubusercontent / gitee），
+    // 用 marked 解析后若直接 v-html 渲染，一旦远端内容被篡改就是 XSS
+    // （配合 contextIsolation:false 可直接调用 window.api 特权通道）。
+    // 这里与 release notes 一样先过 DOMPurify 再落地。
+    currentDocContent.value = DOMPurify.sanitize(marked.parse(text), {
+      USE_PROFILES: { html: true },
+    });
 
     // 等待 DOM 更新后，将滚动条回到顶部
     nextTick(() => {

@@ -288,10 +288,27 @@ export function listSkills(skillRootPath) {
 }
 
 /**
+ * 把 skillId 安全地解析到 skillRootPath 之内，防止路径穿越。
+ *
+ * ⚠️ 安全：skillId 可能来自远端（手机端 relay 的 caps-edit / skill-save / skill-delete）。
+ * 以前直接用 path.join(skillRootPath, skillId)，传入 "../../foo" 就能读写/递归删除
+ * skill 目录之外的任意路径。现在强制解析后的绝对路径必须落在 skillRootPath 内，
+ * 否则抛错。
+ */
+function resolveSkillDirWithin(skillRootPath, skillId) {
+  const root = path.resolve(String(skillRootPath || ''))
+  const target = path.resolve(root, String(skillId ?? ''))
+  if (target !== root && !target.startsWith(root + path.sep)) {
+    throw new Error(`Invalid skill id: ${skillId}`)
+  }
+  return target
+}
+
+/**
  * 获取单个 Skill 详情
  */
 export function getSkillDetails(skillRootPath, skillId) {
-  const skillDir = path.join(skillRootPath, skillId)
+  const skillDir = resolveSkillDirWithin(skillRootPath, skillId)
   const skillMdPath = path.join(skillDir, 'SKILL.md')
 
   if (!fs.existsSync(skillMdPath)) {
@@ -547,7 +564,7 @@ export async function resolveSkillInvocation(skillRootPath, skillName, toolArgsO
  * 保存/创建 Skill
  */
 export function saveSkill(skillRootPath, skillId, content) {
-  const skillDir = path.join(skillRootPath, skillId)
+  const skillDir = resolveSkillDirWithin(skillRootPath, skillId)
   if (!fs.existsSync(skillDir)) {
     fs.mkdirSync(skillDir, { recursive: true })
   }
@@ -561,7 +578,12 @@ export function saveSkill(skillRootPath, skillId, content) {
  * 删除 Skill
  */
 export function deleteSkill(skillRootPath, skillId) {
-  const skillDir = path.join(skillRootPath, skillId)
+  let skillDir
+  try {
+    skillDir = resolveSkillDirWithin(skillRootPath, skillId)
+  } catch (_) {
+    return false
+  }
   if (!fs.existsSync(skillDir)) {
     return false
   }
@@ -660,7 +682,7 @@ function addSkillDirectoryToZip(zip, sourceDir, options = {}) {
 export function exportSkillToPackage(skillRootPath, skillId, outputDir, options = {}) {
   return new Promise((resolve, reject) => {
     try {
-      const skillDir = path.join(skillRootPath, skillId)
+      const skillDir = resolveSkillDirWithin(skillRootPath, skillId)
       if (!fs.existsSync(skillDir)) {
         reject(new Error(`Skill directory not found: ${skillDir}`))
         return
@@ -669,7 +691,10 @@ export function exportSkillToPackage(skillRootPath, skillId, outputDir, options 
       const zip = new AdmZip()
       addSkillDirectoryToZip(zip, skillDir, options)
 
-      const outputFilename = `${skillId}.skill`
+      // ⚠️ 安全：skillId 可能含 "../"，拼进文件名会写到 outputDir 之外。
+      // 用取 basename 的方式强制落到 outputDir 内。
+      const safeId = path.basename(String(skillId || '')).replace(/[\\/:*?"<>|]/g, '-') || 'skill'
+      const outputFilename = `${safeId}.skill`
       const outputPath = path.join(outputDir, outputFilename)
 
       zip.writeZip(outputPath)
