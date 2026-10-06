@@ -1113,10 +1113,16 @@ export async function deleteMessages({ dirPath, conversationId, holderInstanceId
       let removed = 0
       let uiRemoved = 0
       for (const id of ids) {
-        removed += Number(stmt.run(id).changes) || 0
-        uiRemoved += Number(uiByMsg.run(id).changes) || 0
-        // 前两步都没命中 → 尝试按 ui_uuid 删（纯 UI 消息）
-        if (removed === 0 && uiRemoved === 0) {
+        // ⚠️ 必须先取**本条**的命中数再累加：以前直接用累计值
+        // （removed === 0 && uiRemoved === 0）判断，一旦前面的消息命中过，
+        // 累计值就永不归零，后面「纯 UI 消息」的 ui_uuid 兜底彻底失效 ——
+        // 表现就是「删了没反应」「重新打开会话消息又复活」。
+        const mRemoved = Number(stmt.run(id).changes) || 0
+        const uRemoved = Number(uiByMsg.run(id).changes) || 0
+        removed += mRemoved
+        uiRemoved += uRemoved
+        // 本条前两步都没命中 → 尝试按 ui_uuid 删（纯 UI 消息）
+        if (mRemoved === 0 && uRemoved === 0) {
           uiRemoved += Number(uiByUuid.run(id).changes) || 0
         }
       }

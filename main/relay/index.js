@@ -430,6 +430,10 @@ async function readCapabilities() {
 // ---------------------------------------------------------------------------
 function isWindowAlive(id) {
   if (!id || !ctx?.getWindowByRef) return false
+  // ⚠️ 只认字符串 id：getWindowByRef 对非字符串直接返回 null，
+  // 若不先校验，任何非法 id 都会被误判成「窗口还在」，于是跳过重建、
+  // 向无效 target 派发，手机端一直等不到回复。
+  if (typeof id !== 'string') return false
   try {
     const w = ctx.getWindowByRef(id)
     return !!(w && typeof w.isDestroyed === 'function' && !w.isDestroyed())
@@ -810,6 +814,20 @@ async function deletePhoneConversation(conversationId) {
     phoneWindowKey = 'phone'
   }
 
+  // ⚠️ 还要关掉 convWindows 里为这个会话单独开的窗口。
+  // 只清 phoneWindowId 时：如果该会话窗口登记在 convWindows（当前手机槽位
+  // 停在别的会话），删掉文件后这个窗口仍活着，继续持有已删除的会话；
+  // 下一次 message-action 还会把它当成有效目标。
+  const convWid = convWindows.get(ref)
+  if (convWid && isWindowAlive(convWid)) {
+    try {
+      ctx.getWindowByRef(convWid)?.destroy?.()
+    } catch (err) {
+      rwarn('[relay] destroy conv window before delete failed:', err?.message || err)
+    }
+  }
+  convWindows.delete(ref)
+
   const res = await storeDeleteConversation({ dirPath, conversationId: ref })
   rlog('[relay] deleted conversation', ref, 'removed =', res?.removed)
   return { ok: res?.ok !== false, removed: !!res?.removed }
@@ -833,8 +851,17 @@ async function deletePhoneMessages(conversationId, storageIds) {
   if (!dirPath) return { ok: false, reason: 'chat_dir_not_configured' }
   const ids = (Array.isArray(storageIds) ? storageIds : []).map((x) => String(x)).filter(Boolean)
   if (!ids.length) return { ok: false, reason: 'storageIds_required' }
-  await storeDeleteMessages({ dirPath, conversationId, storageIds: ids })
-  return { ok: true, deleted: ids.length }
+  const res = await storeDeleteMessages({ dirPath, conversationId, storageIds: ids })
+  // ⚠️ 回**真实**删除数，不能直接回 ids.length：
+  // 之前哪怕一条都没删掉也报「已删除 N 条」，手机端显示成功，
+  // 但重新打开会话消息又回来了 —— 用户以为「删了没反应」。
+  const removed = Number(res?.removed) || 0
+  const uiRemoved = Number(res?.uiRemoved) || 0
+  const deleted = removed + uiRemoved
+  if (deleted === 0) {
+    return { ok: false, reason: 'nothing_deleted', deleted: 0 }
+  }
+  return { ok: true, deleted }
 }
 
 /**
@@ -1212,6 +1239,17 @@ async function routePhoneChat(msg) {
       })
     } catch (err) {
       rwarn('[relay] capabilities reply failed:', err?.message || err)
+      // ⚠️ 失败也要回一条同 role 的包，否则手机端能力页会一直转圈。
+      try {
+        relay?.sendChat(
+          JSON.stringify({
+            __relayCapabilities: { ok: false, reason: String(err?.message || err || 'caps_failed') }
+          }),
+          { role: 'capabilities', to }
+        )
+      } catch (e2) {
+        rwarn('[relay] capabilities failure reply failed:', e2?.message || e2)
+      }
     }
     return
   }
@@ -1226,6 +1264,15 @@ async function routePhoneChat(msg) {
       })
     } catch (err) {
       rwarn('[relay] tasks reply failed:', err?.message || err)
+      // ⚠️ 同上：失败必须回包，否则手机端任务页一直转圈。
+      try {
+        relay?.sendChat(JSON.stringify({ __relayTasks: [], ok: false, reason: String(err?.message || err || 'tasks_failed') }), {
+          role: 'tasks',
+          to
+        })
+      } catch (e2) {
+        rwarn('[relay] tasks failure reply failed:', e2?.message || e2)
+      }
     }
     return
   }
@@ -2058,7 +2105,7 @@ async function routePhoneChat(msg) {
 
     try {
       // 窗口刚建好时 payload 会被排队，bootstrap 完成后自动冲刷，不会丢
-      ctx.dispatchWindowEvent(
+      const dispatched = ctx.dispatchWindowEvent(
         {
           event: 'relay:incoming',
           payload: { type: 'multiline-text', payload: text, ...relayFields },
@@ -2066,10 +2113,43 @@ async function routePhoneChat(msg) {
         },
         { getWindowByRef: ctx.getWindowByRef, listWindows: ctx.listWindows }
       )
+      // ⚠️ 派发返回 ok:false（窗口在存活检查之后、派发之前被关掉）时，
+      // 必须回执并 return，否则会掉进下面的通用手机窗口分支，
+      // 把本该属于**指定会话**的消息发到别的窗口，且手机永远收不到结果。
+      if (dispatched && dispatched.ok === false) {
+        rwarn('[relay] dispatch into conversation window rejected:', dispatched.reason || 'unknown')
+        relay?.sendChat(
+          JSON.stringify({
+            __relayConversationOpen: {
+              ok: false,
+              conversationId: wantConvId,
+              reason: dispatched.reason || 'dispatch_failed'
+            }
+          }),
+          { role: 'conversation-open-result', to: relayTo }
+        )
+        return
+      }
       rlog('[relay] routed phone message into conversation', wantConvId, 'window', targetWin)
       return
     } catch (err) {
       rwarn('[relay] dispatch to conversation window failed:', err?.message || err)
+      // ⚠️ 抛异常同样必须回执 + return，不能继续往下走通用分支。
+      try {
+        relay?.sendChat(
+          JSON.stringify({
+            __relayConversationOpen: {
+              ok: false,
+              conversationId: wantConvId,
+              reason: String(err?.message || err || 'dispatch_failed')
+            }
+          }),
+          { role: 'conversation-open-result', to: relayTo }
+        )
+      } catch (e2) {
+        rwarn('[relay] conversation dispatch failure reply failed:', e2?.message || e2)
+      }
+      return
     }
   }
 
@@ -2108,6 +2188,31 @@ async function routePhoneChat(msg) {
       const opened = await openPhoneConversation(reusableId, relayTo)
       if (opened?.ok) {
         convWindows.set(reusableId, opened.windowId)
+        // ⚠️ BUG 修复：复用已有「手机」会话时，openPhoneConversation 是用
+        // payload:'' 开窗的；如果这里直接 return，**这条用户文本就被丢掉了** ——
+        // 手机端显示「已发送」，电脑端既没有这条消息、也不会触发 AI。
+        // （重启/重连后给「手机」会话发第一条消息时最容易命中。）
+        let dispatched = null
+        try {
+          dispatched = ctx.dispatchWindowEvent(
+            {
+              event: 'relay:incoming',
+              payload: { type: 'multiline-text', payload: text, ...relayFields },
+              target: opened.windowId
+            },
+            { getWindowByRef: ctx.getWindowByRef, listWindows: ctx.listWindows }
+          )
+        } catch (err) {
+          rwarn('[relay] dispatch into reused phone conversation failed:', err?.message || err)
+        }
+        if (!dispatched || dispatched.ok === false) {
+          rwarn(
+            '[relay] reused conversation dispatch not delivered:',
+            dispatched?.reason || 'unknown',
+            'conv =',
+            reusableId
+          )
+        }
         rlog('[relay] routed phone chat into existing conversation:', reusableId)
         return
       }
@@ -2253,7 +2358,21 @@ function registerIpc() {
 
   // 允许渲染进程主动重开手机会话窗口
   ipcMain.handle('relay:resetPhoneWindow', guard(async () => {
+    // ⚠️ 只清 phoneWindowId 是不够的：phoneWindowKey 若还停在 conv:<id>，
+    // 与 convWindows 里的旧引用就形成「状态分裂」—— 之后发消息不会命中
+    // alreadyBound，却又能从 Map 里捞到旧窗口。这里一并复位 + 关闭。
+    if (isWindowAlive(phoneWindowId)) {
+      try {
+        ctx.getWindowByRef(phoneWindowId)?.destroy?.()
+      } catch (err) {
+        rwarn('[relay] resetPhoneWindow destroy failed:', err?.message || err)
+      }
+    }
+    if (typeof phoneWindowKey === 'string' && phoneWindowKey.startsWith('conv:')) {
+      convWindows.delete(phoneWindowKey.slice(5))
+    }
     phoneWindowId = null
+    phoneWindowKey = 'phone'
     return { ok: true }
   }))
 }
