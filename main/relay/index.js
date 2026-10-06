@@ -2040,12 +2040,26 @@ async function routePhoneChat(msg) {
     }
   }
 
+  // ⚠️ 助手属于「会话」，不属于「随消息下发的参数」。
+  //
+  // 往**指定会话**（wantConvId）投递时，绝不能把手机新选的 promptKey 带进去：
+  // 窗口只会把 model / mcp / skills 应用到自己身上，promptKey 根本不会生效，
+  // 结果是「旧会话的助手 + 新助手的参数」这种混合状态 —— 就是用户说的
+  // 「会话和助手绑定不严格 / 会错乱」。
+  // 换助手的正确语义是「开新会话」（手机端会先解绑，这里是兜底）。
+  let relayOpts = opts
+  if (wantConvId && opts && typeof opts === 'object' && opts.promptKey) {
+    const { promptKey: _dropped, ...rest } = opts
+    relayOpts = rest
+    rlog('[relay] dropped promptKey when routing to bound conversation:', wantConvId, '->', _dropped)
+  }
+
   const relayFields = {
     relayTo,
     // 手机本地的消息 id —— 窗口 append 后会把它原样回传，
     // 手机就能精确把「电脑端位置」挂到对应气泡上（自己发的消息也能删）。
     __relayClientMsgId: msg?.__relayClientMsgId || '',
-    ...(opts ? { __relayOptions: opts } : {})
+    ...(relayOpts ? { __relayOptions: relayOpts } : {})
   }
 
   // 0) 手机指定了会话 → 必须让那个会话的窗口来处理这条消息。
