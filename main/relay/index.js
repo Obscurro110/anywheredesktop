@@ -1256,6 +1256,7 @@ async function routePhoneChat(msg) {
       relay?.sendChat(
         JSON.stringify({
           __relayConversations: res.conversations || [],
+          projects: res.projects || [],
           ok: res.ok,
           reason: res.reason || '',
           dirPath: res.dirPath || ''
