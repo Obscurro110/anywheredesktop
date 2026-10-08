@@ -920,6 +920,11 @@ async function openPhoneConversation(conversationId, relayTo) {
     return { ok: false, reason: 'conversation_not_found' }
   }
 
+  const promptKey =
+    opened.sessionData?.promptKey ||
+    opened.sessionData?.sessionMetadata?.promptKey ||
+    phonePromptKey
+
   // 已经为这个会话开过窗口就复用
   const reuseKey = `conv:${opened.descriptor.conversationId}`
   if (phoneWindowId && phoneWindowKey === reuseKey && isWindowAlive(phoneWindowId)) {
@@ -933,16 +938,12 @@ async function openPhoneConversation(conversationId, relayTo) {
         { getWindowByRef: ctx.getWindowByRef, listWindows: ctx.listWindows }
       )
       convWindows.set(opened.descriptor.conversationId, phoneWindowId)
-      return { ok: true, windowId: phoneWindowId, reused: true, title: opened.descriptor.title }
+      return { ok: true, windowId: phoneWindowId, reused: true, title: opened.descriptor.title, promptKey }
     } catch (err) {
       rwarn('[relay] reuse conversation window failed:', err?.message || err)
     }
   }
 
-  const promptKey =
-    opened.sessionData?.promptKey ||
-    opened.sessionData?.sessionMetadata?.promptKey ||
-    phonePromptKey
 
   const res = await ctx.openWindow('window', {
     code: promptKey,
@@ -1334,6 +1335,8 @@ async function routePhoneChat(msg) {
             reason: res.reason || '',
             windowId: res.windowId || null,
             title: res.title || '',
+            promptKey: res.promptKey || '',
+            assistantName: res.assistantName || '',
             reused: !!res.reused
           }
         }),
@@ -2019,6 +2022,20 @@ async function routePhoneChat(msg) {
   const opts = msg?.options && typeof msg.options === 'object' ? msg.options : null
   // 手机明确说了「我在哪个会话里」—— 必须投递到那个会话，不能自作主张
   const wantConvId = String(msg?.conversationId ?? '').trim()
+  const forceNewConversation = !wantConvId && msg?.__relayNewConversation === true
+  if (forceNewConversation) {
+    // 换助手后不能复用旧手机窗口或历史会话，确保下一条创建新会话。
+    if (isWindowAlive(phoneWindowId)) {
+      try { ctx.getWindowByRef(phoneWindowId)?.destroy?.() } catch (err) {
+        rwarn('[relay] destroy old window for new conversation failed:', err?.message || err)
+      }
+    }
+    if (typeof phoneWindowKey === 'string' && phoneWindowKey.startsWith('conv:')) {
+      convWindows.delete(phoneWindowKey.slice(5))
+    }
+    phoneWindowId = null
+    phoneWindowKey = 'phone'
+  }
 
   // 手机切换了「快捷助手」→ 换一个 promptKey 承载这个会话
   //
@@ -2204,7 +2221,7 @@ async function routePhoneChat(msg) {
     // 以前这里无条件新建：每次窗口重建（切助手/重连/重启）都会多出一个
     // 标题为「手机」的会话，手机端列表里一堆同名项、内容还各不相同。
     // 现在优先接着上次那个「手机」会话聊。
-    const reusableId = await findReusablePhoneConversationId(phonePromptKey)
+    const reusableId = forceNewConversation ? '' : await findReusablePhoneConversationId(phonePromptKey)
     if (reusableId) {
       const opened = await openPhoneConversation(reusableId, relayTo)
       if (opened?.ok) {
