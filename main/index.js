@@ -16,7 +16,7 @@
  */
 
 
-import { app, Menu, Tray, nativeTheme, nativeImage, powerMonitor, BrowserWindow } from 'electron'
+import { app, Menu, Tray, nativeTheme, nativeImage, powerMonitor, BrowserWindow, safeStorage } from 'electron'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipcHandler.js'
 import {
@@ -35,6 +35,8 @@ import {
   handleFastInputWindowEvent,
   appendPayloadToWindow,
   setMainWindowCloseBehavior,
+  setWindowMetadataNotifier,
+  updateConversationWindowMetadata,
   markAppQuitting,
   isSingletonWindowVisible
 } from './windowManager.js'
@@ -55,6 +57,8 @@ import * as skillApi from './core/skill.js'
 import * as screenshotApi from './core/screenshot.js'
 import * as updaterApi from './core/updater.js'
 import * as compactApi from './core/compact.js'
+import { createRemoteGateway } from './core/remote/index.js'
+import { createRemoteConversationReadService } from './core/remote/conversationRead.js'
 
 
 import { applyNetworkProxyConfig, installRequestHeaderBridge } from './core/net.js'
@@ -64,6 +68,59 @@ import { startRelay } from './relay/index.js'
 
 let appTray = null
 let appQuitStarted = false
+const remoteConversationReadService = createRemoteConversationReadService({
+  getConfig: dataApi.getConfig,
+  listLocalConversations: conversationApi.listLocalConversations,
+  readLocalProjects: projectsApi.readLocalProjects,
+  loadRemoteConversationPage: conversationApi.loadRemoteConversationPage,
+  listWindows
+})
+
+
+
+const remoteGateway = createRemoteGateway({
+  app,
+  safeStorage,
+  dbStorageGetItem: dbApi.dbStorageGetItem,
+  dbStorageSetItem: dbApi.dbStorageSetItem,
+  getAppVersion: () => app.getVersion(),
+  conversationReadService: remoteConversationReadService,
+  onStatusChanged: (status) => {
+    for (const item of listWindows('main')) {
+      const win = getWindowByRef(item.id)
+      if (!win || win.isDestroyed()) continue
+      try {
+        win.webContents.send('remote:status-changed', status)
+      } catch {
+        // A renderer teardown must not interrupt gateway state changes.
+      }
+    }
+  }
+})
+
+setWindowMetadataNotifier((change = {}) => {
+  const windows = (Array.isArray(change.windows) ? change.windows : [])
+    .filter((item) => typeof item?.conversationId === 'string' && item.conversationId)
+    .map((item) => ({
+      windowId: typeof item.id === 'string' ? item.id : '',
+      conversationId: item.conversationId,
+      title: typeof item.conversationTitle === 'string' ? item.conversationTitle : '',
+      revision: Math.max(0, Number(item.conversationRevision) || 0),
+      visible: item.visible === true,
+      busy: item.busy === true,
+      generating: item.generating === true,
+      compacting: item.compacting === true,
+      readOnly: item.readOnly === true,
+      leasePending: item.leasePending === true
+    }))
+  remoteGateway.broadcastEvent('conversation.windows.changed', {
+    reason: typeof change.reason === 'string' ? change.reason : 'updated',
+    windows,
+    updatedAt: new Date().toISOString()
+  })
+})
+
+
 
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -535,6 +592,9 @@ function beginAppQuit() {
   markAppQuitting(true)
   clearDesktopShortcuts()
   systemApi.stopClipboardWatcher()
+  remoteGateway.stop().catch((error) => {
+    console.error('remote-gateway:stop-failed', error?.message || error)
+  })
   dataApi.setWindowChannelNotifier(null)
 }
 
@@ -712,6 +772,7 @@ app.whenReady().then(async () => {
     mcpApi,
     skillApi,
     compactApi,
+    remoteGateway,
 
     updaterApi,
 
@@ -721,6 +782,7 @@ app.whenReady().then(async () => {
     toggleAlwaysOnTop,
     handleFastInputWindowEvent,
     appendPayloadToWindow,
+    updateConversationWindowMetadata,
     startScreenshotPromptWorkflow,
     confirmScreenshotPromptWorkflow,
     cancelScreenshotPromptWorkflow
@@ -729,7 +791,10 @@ app.whenReady().then(async () => {
   systemApi.startClipboardWatcher()
   startTaskScheduler({ dataApi, openWindow })
 
-  await syncDesktopRuntimeFromConfig()
+  const initialRuntime = await syncDesktopRuntimeFromConfig()
+  await remoteGateway.configure(initialRuntime?.config || {}).catch((error) => {
+    console.error('remote-gateway:startup-failed', error?.message || error)
+  })
   ensureTray()
   await openWindow('main')
 

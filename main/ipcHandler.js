@@ -123,6 +123,7 @@ export function registerIpcHandlers({
   mcpApi,
   skillApi,
   compactApi,
+  remoteGateway,
 
   updaterApi,
 
@@ -132,6 +133,7 @@ export function registerIpcHandlers({
   toggleAlwaysOnTop,
   handleFastInputWindowEvent,
   appendPayloadToWindow,
+  updateConversationWindowMetadata,
   startScreenshotPromptWorkflow,
   confirmScreenshotPromptWorkflow,
   cancelScreenshotPromptWorkflow
@@ -187,6 +189,12 @@ export function registerIpcHandlers({
       },
       { getWindowByRef, listWindows }
     )
+
+  handleInvoke('window:conversationStatus', async (event, input = {}) => {
+    const sourceId = getWindowRefByWebContentsId(event.sender.id)
+    return updateConversationWindowMetadata(sourceId || '', input)
+  })
+
   })
 
   handleInvoke('window:appendToWindow', async (event, input = {}) => {
@@ -412,6 +420,50 @@ export function registerIpcHandlers({
       version: app.getVersion()
     }
   })
+
+  handleInvoke('remote:getStatus', async () => {
+    return remoteGateway.getStatus()
+  })
+
+  handleInvoke('remote:saveAndConfigure', async (_event, remoteSettings = {}) => {
+    const current = await dataApi.getConfig()
+    const currentConfig = current?.config && typeof current.config === 'object' ? current.config : {}
+    const candidateSettings = remoteSettings && typeof remoteSettings === 'object' ? remoteSettings : {}
+    const candidateConfig = { ...currentConfig, remote: candidateSettings }
+    const status = await remoteGateway.configure(candidateConfig)
+    if (candidateSettings.enabled === true && !status.running) {
+      await remoteGateway.configure(currentConfig)
+      return { ok: false, error: { message: status.lastError || 'remote_start_failed' }, status }
+    }
+    const normalizedSettings = remoteGateway.getPublicSettings()
+    const persisted = await dataApi.saveSetting('remote', normalizedSettings)
+    if (persisted?.success === false) {
+      await remoteGateway.configure(currentConfig)
+      return { ok: false, error: { message: persisted?.message || 'remote_config_save_failed' }, status }
+    }
+    return { ok: true, status: remoteGateway.getStatus() }
+  })
+
+  handleInvoke('remote:createPairing', async () => {
+    return remoteGateway.createPairing()
+  })
+
+  handleInvoke('remote:listDevices', async () => {
+    return remoteGateway.listDevices()
+  })
+
+  handleInvoke('remote:renameDevice', async (_event, deviceId = '', displayName = '') => {
+    return remoteGateway.renameDevice(deviceId, displayName)
+  })
+
+  handleInvoke('remote:revokeDevice', async (_event, deviceId = '') => {
+    return remoteGateway.revokeDevice(deviceId)
+  })
+
+  handleInvoke('remote:getAuditLog', async () => {
+    return remoteGateway.getAuditLog()
+  })
+
 
   handleInvoke('app:checkLatestVersion', async () => {
     const currentVersion = app.getVersion()
