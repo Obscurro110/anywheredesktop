@@ -475,13 +475,12 @@ function resolvePromptDisplayName(payload = null, promptCode = '__DEFAULT__') {
   if (filename) return filename
 
   return 'AI'
+}
+
 function normalizeConversationMetadataId(value = '') {
   const normalized = typeof value === 'string' ? value.trim() : ''
   if (!/^[A-Za-z0-9._:-]{16,160}$/.test(normalized)) return ''
   return normalized
-}
-
-
 }
 
 function buildWindowMetadata(windowRef = '', payload = null, fullConfig = {}, promptCode = '__DEFAULT__', promptConfig = null) {
