@@ -623,7 +623,43 @@ async function listPhoneConversations() {
  * 电脑端 `deleteMessage(index)` 就是按这个下标删的。
  * `messageId` 是 assistant 气泡的 id，手机端「重新回答」要回传它。
  */
+async function readLiveConversationMessages(conversationId) {
+  pruneConvWindows()
+  const windowId = convWindows.get(String(conversationId || '').trim())
+  if (!isWindowAlive(windowId)) return null
+  const win = ctx.getWindowByRef(windowId)
+  if (!win?.webContents?.executeJavaScript) return null
+  const snapshot = await win.webContents.executeJavaScript(`(() => {
+    const show = Array.isArray(window.__AGENT_API__?.chatShow?.()) ? window.__AGENT_API__.chatShow() : []
+    return { busy: Boolean(window.__AGENT_API__?.isBusy?.()), messages: show }
+  })()`, true).catch(() => null)
+  return snapshot && Array.isArray(snapshot.messages) ? snapshot : null
+}
+
 async function readPhoneConversationMessages(conversationId) {
+  const live = await readLiveConversationMessages(conversationId).catch(() => null)
+  if (live) {
+    const messages = []
+    live.messages.forEach((m, index) => {
+      if (!m || typeof m !== 'object') return
+      const role = String(m.role || '')
+      if (role !== 'user' && role !== 'assistant' && role !== 'system') return
+      const text = extractMessagePlainText(m)
+      const waiting = role === 'assistant' && !text && Boolean(live.busy && index === live.messages.length - 1)
+      if (!text && !waiting) return
+      messages.push({
+        index,
+        pending: waiting,
+        id: String(m.id ?? ''),
+        storageId: String(m.storageId || ''),
+        uiStorageId: String(m.uiStorageId || ''),
+        role,
+        text: waiting ? '' : text,
+        time: formatMessageTime(m)
+      })
+    })
+    return { ok: true, messages, count: messages.length }
+  }
   const dirPath = await readChatDirPath()
   if (!dirPath) return { ok: false, reason: 'chat_dir_not_configured', messages: [] }
 
@@ -647,7 +683,7 @@ async function readPhoneConversationMessages(conversationId) {
     if (role !== 'user' && role !== 'assistant' && role !== 'system') return
     // 用增强版：content + tool_calls 一起转成手机可读文本
     const text = extractMessagePlainText(m)
-    const waiting = role === 'assistant' && !text && (m.pending === true || m.streaming === true)
+    const waiting = role === 'assistant' && !text && index === chatShow.length - 1 && ['preparing', 'thinking'].includes(String(m.status || ''))
     if (!text && !waiting) return
     messages.push({
       index,
@@ -660,15 +696,10 @@ async function readPhoneConversationMessages(conversationId) {
       uiStorageId: String(m.uiStorageId || ''),
       role,
       text,
-      time: m.createdAt || m.timestamp || m.completedTimestamp || ''
+      time: formatMessageTime(m)
     })
   })
-  messages.sort((a, b) => {
-    const left = Date.parse(a.time)
-    const right = Date.parse(b.time)
-    if (Number.isFinite(left) && Number.isFinite(right) && left !== right) return left - right
-    return a.index - b.index
-  })
+  messages.sort((a, b) => a.index - b.index)
   const promptKey =
       opened.sessionData?.promptKey ||
       opened.sessionData?.sessionMetadata?.promptKey ||
@@ -692,6 +723,16 @@ async function readPhoneConversationMessages(conversationId) {
 /** 剥掉正文里残留的思考标记：有些模型/中转把思考直接包成
  *  `<thinking>...</thinking>` 塞进 content，不剥的话手机上会原样显示。
  */
+function formatMessageTime(m) {
+  const value = m?.timestamp || m?.createdAt || m?.startTime || m?.completedTimestamp || ''
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const date = new Date(value)
+    const pad = (n) => String(n).padStart(2, '0')
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+  }
+  return String(value || '')
+}
+
 function stripThinkingTags(s) {
   if (!s) return s
   return String(s)

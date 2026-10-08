@@ -5456,6 +5456,7 @@ onMounted(async () => {
 
   window.__AGENT_API__ = {
     isBusy: () => loading.value || compacting.value,
+    chatShow: () => chat_show.value,
 
     getChatLength: () => chat_show.value.length,
 
