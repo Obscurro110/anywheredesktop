@@ -60,6 +60,7 @@ linux:
 appImage:
   artifactName: ${name}-${version}.${ext}
 npmRebuild: false
+afterPack: scripts/ensure-packaged-deps.cjs
 publish:
   provider: github
   releaseType: release
