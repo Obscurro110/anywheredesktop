@@ -647,9 +647,11 @@ async function readPhoneConversationMessages(conversationId) {
     if (role !== 'user' && role !== 'assistant' && role !== 'system') return
     // 用增强版：content + tool_calls 一起转成手机可读文本
     const text = extractMessagePlainText(m)
-    if (!text) return
+    const waiting = role === 'assistant' && !text && (m.pending === true || m.streaming === true)
+    if (!text && !waiting) return
     messages.push({
       index,
+      pending: waiting,
       id: String(m.id ?? ''), // chat_show 展示 id（窗口内删除/重新回答用）
       // storageId = messages.message_uuid：批量删除时电脑端用这个删。
       // 注意：不能拿 id 当 storageId —— id 是展示层的，删不中会静默失败
@@ -658,8 +660,14 @@ async function readPhoneConversationMessages(conversationId) {
       uiStorageId: String(m.uiStorageId || ''),
       role,
       text,
-      time: m.completedTimestamp || m.timestamp || ''
+      time: m.createdAt || m.timestamp || m.completedTimestamp || ''
     })
+  })
+  messages.sort((a, b) => {
+    const left = Date.parse(a.time)
+    const right = Date.parse(b.time)
+    if (Number.isFinite(left) && Number.isFinite(right) && left !== right) return left - right
+    return a.index - b.index
   })
   const promptKey =
       opened.sessionData?.promptKey ||
@@ -700,9 +708,15 @@ function extractMessageText(content) {
   if (Array.isArray(content)) {
     return stripThinkingTags(
       content
-        .filter((p) => p && p.type === 'text')
-        .map((p) => p.text || '')
-        .join('')
+        .map((part) => {
+          if (!part || typeof part !== 'object') return ''
+          if (part.type === 'text') return part.text || ''
+          if (part.type === 'image' || part.type === 'image_url') return '[图片]'
+          if (part.type === 'file' || part.type === 'document') return `[文件${part.name ? ` ${part.name}` : ''}]`
+          return ''
+        })
+        .filter(Boolean)
+        .join('\n')
     )
   }
   return ''
