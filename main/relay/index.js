@@ -882,6 +882,21 @@ function extractMessagePlainText(m) {
   return parts.join('\n\n')
 }
 
+/** 让电脑端会话列表重新读取本地文件。列表本身只在窗口重新聚焦时刷新。 */
+function refreshDesktopConversationList() {
+  try {
+    const wins = typeof ctx?.listWindows === 'function' ? ctx.listWindows('main') : []
+    for (const item of Array.isArray(wins) ? wins : []) {
+      const win = ctx.getWindowByRef?.(item?.id)
+      if (!win || win.isDestroyed?.()) continue
+      const run = win.webContents?.executeJavaScript?.(`window.dispatchEvent(new Event('focus'))`)
+      if (run && typeof run.catch === 'function') run.catch(() => {})
+    }
+  } catch (err) {
+    rwarn('[relay] refresh conversation list failed:', err?.message || err)
+  }
+}
+
 /** 删除整个会话 */
 async function deletePhoneConversation(conversationId) {
   const dirPath = await readChatDirPath()
@@ -1491,6 +1506,7 @@ async function routePhoneChat(msg) {
     if (res?.ok !== false) {
       // 删会话后也广播：打开的窗口若还显示这个会话就重载（会提示不存在）
       notifyConversationChanged(conversationId, 'syncMessages')
+      refreshDesktopConversationList()
     }
     relay?.sendChat(
       JSON.stringify({
@@ -1520,6 +1536,7 @@ async function routePhoneChat(msg) {
     }
     if (res?.ok !== false) {
       notifyConversationChanged(conversationId, 'syncTitle', { title: res.title || title })
+      refreshDesktopConversationList()
     }
     relay?.sendChat(
       JSON.stringify({
@@ -2348,12 +2365,15 @@ async function routePhoneChat(msg) {
       code: phonePromptKey,
       type: 'multiline-text',
       payload: text,
-      conversationTitle: '手机',
       ...relayFields
     })
     if (res?.ok && res.id) {
       phoneWindowId = res.id
       rlog('[relay] opened phone chat window:', phoneWindowId)
+      // 标题由窗口按第一条消息自动生成。生成和落盘都是异步的，
+      // 稍后再刷一次列表，避免新会话一直停在旧名字或空白。
+      setTimeout(() => refreshDesktopConversationList(), 1600)
+      setTimeout(() => refreshDesktopConversationList(), 4200)
     } else {
       rwarn('[relay] openWindow returned:', res)
     }
