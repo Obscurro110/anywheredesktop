@@ -19,6 +19,7 @@
     "test:conversation-lease": "node tests/conversation-lease.test.mjs",
     "test:relay-routing": "node tests/relay-routing.test.mjs",
     "test:conversation-order": "node tests/conversation-order.test.mjs",
+    "test:project-move": "node tests/project-move.test.mjs",
     "postinstall": "electron-builder install-app-deps",
     "build:unpack": "pnpm run build && electron-builder --dir --publish never",
     "build:win": "pnpm run build && electron-builder --win nsis --publish never",

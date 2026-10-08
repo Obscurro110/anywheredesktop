@@ -187,6 +187,14 @@ const activeProjectsData = computed(() =>
     activeView.value === 'local' ? localProjects.value : cloudProjects.value
 );
 
+const isConversationReference = (reference) => {
+    const value = String(reference || '').trim();
+    if (!value) return false;
+    if (activeProjectsData.value?.conversations?.[value]) return true;
+    const file = fileByBasename.value.get(value);
+    return file?.format === 'sqlite' && String(file.conversationId || '').trim() === value;
+};
+
 const getConversationReference = (file) => {
     if (file?.format === 'sqlite' && typeof file?.conversationId === 'string' && file.conversationId.trim()) {
         return file.conversationId.trim();
@@ -1360,8 +1368,8 @@ const onProjectDragWheel = (event) => {
 async function assignFilesToProject(references, projectId) {
     if (!Array.isArray(references) || references.length === 0) return;
     try {
-        const conversationIds = references.filter((reference) => activeProjectsData.value?.conversations?.[reference]);
-        const legacyFiles = references.filter((reference) => !activeProjectsData.value?.conversations?.[reference]);
+        const conversationIds = references.filter((reference) => isConversationReference(reference));
+        const legacyFiles = references.filter((reference) => !isConversationReference(reference));
         const draggedFiles = new Set(legacyFiles.map((name) => getJsonBasenameCandidate(name)));
         const draggedConversations = new Set(conversationIds);
         let projects = (activeProjectsData.value.projects || []).map((project) => ({
