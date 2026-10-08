@@ -651,7 +651,7 @@ async function readPhoneConversationMessages(conversationId) {
         index,
         pending: waiting,
         id: String(m.id ?? ''),
-        storageId: String(m.storageId || ''),
+        storageId: String(m.storageId || m.message_uuid || ''),
         uiStorageId: String(m.uiStorageId || ''),
         role,
         text: waiting ? '' : text,
@@ -1634,6 +1634,7 @@ async function routePhoneChat(msg) {
             reqId,
             relayTo: to,
             messageId: msg?.messageId,
+            storageId: msg?.storageId,
             index: msg?.index,
             // choiceSubmit（手机上点 ask_user_choice 的选项）要透传这两个
             toolCallId: msg?.toolCallId,

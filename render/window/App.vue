@@ -794,9 +794,15 @@ const handleRelayCommand = async (cmd) => {
   try {
     if (action === 'reask') {
       // 电脑端要求传 assistant 消息 id
-      const targetId = Number(cmd.messageId);
-      if (!Number.isFinite(targetId)) {
-        reply(false, { reason: 'messageId_required' });
+      const requestedId = String(cmd.messageId ?? '');
+      const requestedStorageId = String(cmd.storageId ?? '');
+      const targetMessage = chat_show.value.findLast((m) =>
+        (requestedId && (String(m?.id ?? '') === requestedId || String(m?.uiStorageId ?? '') === requestedId || String(m?.storageId ?? '') === requestedId))
+        || (requestedStorageId && (String(m?.storageId ?? '') === requestedStorageId || String(m?.uiStorageId ?? '') === requestedStorageId))
+      );
+      const targetId = Number(targetMessage?.id);
+      if (!targetMessage || !Number.isFinite(targetId)) {
+        reply(false, { reason: 'message_not_found' });
         return;
       }
       // reaskAI 内部只会对「最后一条可见消息」生效（其它情况它只弹个
@@ -810,7 +816,7 @@ const handleRelayCommand = async (cmd) => {
         return;
       }
       const lastVisible = chat_show.value[lastVisibleIdx];
-      if (lastVisible?.role !== 'assistant' || String(lastVisible?.id ?? '') !== String(targetId)) {
+      if (lastVisible?.role !== 'assistant' || lastVisible !== targetMessage) {
         relayLog('[relay] reask rejected: target is not the last assistant message. target =', targetId, 'last =', lastVisible?.id, lastVisible?.role);
         reply(false, { reason: 'not_last_message' });
         return;
@@ -853,9 +859,13 @@ const handleRelayCommand = async (cmd) => {
       const wantId = cmd.messageId === undefined || cmd.messageId === null
         ? ''
         : String(cmd.messageId);
+      const requestedStorageId = String(cmd.storageId ?? '');
       let idx = -1;
-      if (wantId) {
-        idx = chat_show.value.findIndex((m) => String(m?.id ?? '') === wantId);
+      if (wantId || requestedStorageId) {
+        idx = chat_show.value.findIndex((m) =>
+          (wantId && (String(m?.id ?? '') === wantId || String(m?.uiStorageId ?? '') === wantId || String(m?.storageId ?? '') === wantId))
+          || (requestedStorageId && (String(m?.storageId ?? '') === requestedStorageId || String(m?.uiStorageId ?? '') === requestedStorageId))
+        );
       }
       if (idx < 0) {
         // 回退：用手机给的下标，但要确认它落在本窗口范围内
