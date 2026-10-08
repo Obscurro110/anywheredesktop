@@ -19,10 +19,12 @@ async function main() {
       sessionData: { anywhere_history: true, fullHistory: [], history: [], chat_show: [] }
     })
     const projects = await readLocalProjects(root)
-    projects.conversations[older.descriptor.conversationId].updatedAt = '2026-10-08T00:00:00.000Z'
-    projects.conversations[newer.descriptor.conversationId].updatedAt = '2026-10-07T00:00:00.000Z'
+    projects.conversations[older.descriptor.conversationId].updatedAt = '2020-01-02T00:00:00.000Z'
+    projects.conversations[newer.descriptor.conversationId].updatedAt = '2020-01-01T00:00:00.000Z'
     await writeLocalProjects(root, projects)
-    const recent = new Date('2026-10-08T12:00:00.000Z')
+    const olderFileTime = new Date('2020-01-01T00:00:00.000Z')
+    const recent = new Date('2020-01-03T00:00:00.000Z')
+    await fs.utimes(older.databasePath, olderFileTime, olderFileTime)
     await fs.utimes(newer.databasePath, recent, recent)
 
     const listed = await store.listLocalConversations(root)
