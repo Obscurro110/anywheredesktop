@@ -17,6 +17,7 @@
 
 
 import { app, Menu, Tray, nativeTheme, nativeImage, powerMonitor, BrowserWindow, safeStorage } from 'electron'
+import path from 'node:path'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipcHandler.js'
 import {
@@ -122,6 +123,10 @@ setWindowMetadataNotifier((change = {}) => {
 
 
 
+
+const relayUserData = path.join(path.dirname(process.execPath), 'user-data')
+app.setPath('userData', relayUserData)
+app.setName('anywhere-desktop-relay')
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 
@@ -726,7 +731,7 @@ async function syncDesktopRuntimeFromConfig() {
 }
 
 app.whenReady().then(async () => {
-  electronApp.setAppUserModelId('com.komorebi.anywhere.desktop')
+  electronApp.setAppUserModelId('com.komorebi.anywhere.desktop.relay')
 
   installRequestHeaderBridge()
 
