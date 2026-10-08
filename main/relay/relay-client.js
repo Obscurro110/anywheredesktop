@@ -107,7 +107,13 @@ export class RelayClient extends EventEmitter {
     } catch {}
     try {
       // readyState: 0 CONNECTING / 1 OPEN / 2 CLOSING / 3 CLOSED
-      if (ws.readyState === 0 || ws.readyState === 1) ws.terminate?.() ?? ws.close();
+      // ⚠️ 以前写 `ws.terminate?.() ?? ws.close()`：terminate() **返回 undefined**，
+      // 所以 ?? 不会短路，close() 还会跟着执行一次（对已销毁的 socket 调 close
+      // 会抛，被这里吞掉）。虽然结果无害，但意图不清。改成明确的分支。
+      if (ws.readyState === 0 || ws.readyState === 1) {
+        if (typeof ws.terminate === 'function') ws.terminate()
+        else ws.close()
+      }
     } catch {}
   }
 
