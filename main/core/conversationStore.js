@@ -822,7 +822,8 @@ export async function listLocalConversations(dirPath) {
     const stats = fileStats.get(descriptor.dbFile)
     if (!stats) continue
     if (descriptor.legacyJson) mappedLegacy.add(descriptor.legacyJson)
-    const updatedAt = descriptor.updatedAt || stats.mtime?.toISOString?.() || ''
+    const fileUpdatedAt = stats.mtime?.toISOString?.() || ''
+    const updatedAt = newerTimestamp(descriptor.updatedAt, fileUpdatedAt)
     conversations.push({
       type: 'file',
       format: 'sqlite',
@@ -862,7 +863,16 @@ export async function listLocalConversations(dirPath) {
   )
   conversations.push(...legacyConversations.filter(Boolean))
 
-  return conversations.sort((a, b) => new Date(b.updatedAt || b.lastmod || 0).getTime() - new Date(a.updatedAt || a.lastmod || 0).getTime())
+  return conversations.sort((a, b) => timestampMillis(b.updatedAt || b.lastmod) - timestampMillis(a.updatedAt || a.lastmod))
+}
+
+function timestampMillis(value) {
+  const time = new Date(value || 0).getTime()
+  return Number.isFinite(time) ? time : 0
+}
+
+function newerTimestamp(left, right) {
+  return timestampMillis(left) >= timestampMillis(right) ? (left || right || '') : (right || left || '')
 }
 
 export async function loadConversationPage({ dirPath, conversationId, beforeOrdinal = null, beforeUiOrder = null, pageSize = 200 } = {}) {
