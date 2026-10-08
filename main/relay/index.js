@@ -631,8 +631,27 @@ async function readLiveConversationMessages(conversationId) {
   if (!win?.webContents?.executeJavaScript) return null
   const snapshot = await win.webContents.executeJavaScript(`(() => {
     const show = Array.isArray(window.__AGENT_API__?.chatShow?.()) ? window.__AGENT_API__.chatShow() : []
-    return { busy: Boolean(window.__AGENT_API__?.isBusy?.()), messages: show }
-  })()`, true).catch(() => null)
+    const busy = Boolean(window.__AGENT_API__?.isBusy?.())
+    return JSON.stringify({
+      busy,
+      messages: show.map((m) => ({
+        id: m?.id,
+        role: m?.role,
+        content: m?.content,
+        tool_calls: Array.isArray(m?.tool_calls) ? m.tool_calls.map((tc) => ({ name: tc?.name })) : [],
+        status: m?.status,
+        storageId: m?.storageId,
+        uiStorageId: m?.uiStorageId,
+        timestamp: m?.timestamp,
+        createdAt: m?.createdAt,
+        startTime: m?.startTime,
+        completedTimestamp: m?.completedTimestamp,
+        endTime: m?.endTime
+      }))
+    })
+  })()`, true).then((raw) => {
+    try { return JSON.parse(raw) } catch { return null }
+  }).catch(() => null)
   return snapshot && Array.isArray(snapshot.messages) ? snapshot : null
 }
 
@@ -645,7 +664,7 @@ async function readPhoneConversationMessages(conversationId) {
       const role = String(m.role || '')
       if (role !== 'user' && role !== 'assistant' && role !== 'system') return
       const text = extractMessagePlainText(m)
-      const waiting = role === 'assistant' && !text && Boolean(live.busy && index === live.messages.length - 1)
+      const waiting = role === 'assistant' && Boolean(live.busy && index === live.messages.length - 1)
       if (!text && !waiting) return
       messages.push({
         index,
@@ -654,10 +673,22 @@ async function readPhoneConversationMessages(conversationId) {
         storageId: String(m.storageId || m.message_uuid || ''),
         uiStorageId: String(m.uiStorageId || ''),
         role,
-        text: waiting ? '' : text,
+        text: waiting && !text ? '' : text,
         time: formatMessageTime(m)
       })
     })
+    if (live.busy && messages.at(-1)?.role !== 'assistant') {
+      messages.push({
+        index: live.messages.length,
+        pending: true,
+        id: 'live-pending',
+        storageId: '',
+        uiStorageId: '',
+        role: 'assistant',
+        text: '',
+        time: ''
+      })
+    }
     return { ok: true, messages, count: messages.length }
   }
   const dirPath = await readChatDirPath()
