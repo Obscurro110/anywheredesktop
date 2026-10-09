@@ -5,12 +5,6 @@ import { app } from 'electron'
 
 import { safeClone } from '../dataConverter.js'
 import { fetchWithProxy, normalizeNetworkProxyConfig } from './net.js'
-import { sanitizeRemoteSettingsForConfig } from './remote/protocol.js'
-import {
-  mergeLocalRemoteSettings,
-  preserveLocalRemoteSettings,
-  splitLocalRemoteSettings
-} from './remote/configLocal.js'
 import { getBuiltinServers as getBuiltinMcpServers } from './mcp_builtin.js'
 
 import {
@@ -307,13 +301,6 @@ export const defaultConfig = {
     isAlwaysOnTop_global: true,
     autoCloseOnBlur_global: true,
     autoSaveChat_global: false,
-    // Remote v2 is disabled by default. Gateway identity/device secrets are stored separately.
-    remote: {
-      enabled: false,
-      host: '0.0.0.0',
-      port: 17860,
-      publicEndpoint: ''
-    },
     zoom: 1,
     webdav: {
       url: '',
@@ -574,18 +561,15 @@ function sanitizePromptBindings(bindings = []) {
 function splitConfigForStorage(fullConfig) {
   const source = deepClone(fullConfig || {})
   const { prompts, providers, mcpServers, tasks, ...restOfConfig } = source
-  const remoteSplit = splitLocalRemoteSettings(restOfConfig, defaultConfig.config.remote)
-  const sharedRestOfConfig = remoteSplit.sharedConfig
+  const sharedRestOfConfig = deepClone(restOfConfig)
 
   const localConfigPart = {
     skillPath: sharedRestOfConfig.skillPath || '',
-    localChatPath: sharedRestOfConfig?.webdav?.localChatPath || '',
-    // Remote listener addresses are machine-local. Device/TLS secrets live in the
-    // remote gateway's encrypted storage and are never represented in config.
-    remote: remoteSplit.remote
+    localChatPath: sharedRestOfConfig?.webdav?.localChatPath || ''
   }
 
   delete sharedRestOfConfig.skillPath
+  delete sharedRestOfConfig.remote
   if (sharedRestOfConfig.webdav && typeof sharedRestOfConfig.webdav === 'object') {
     delete sharedRestOfConfig.webdav.localChatPath
   }
@@ -675,14 +659,6 @@ const rootDefaults = {
       server: '',
       bypassRules: '<local>'
     },
-    // Remote v2 listens only when the user explicitly enables it in Desktop.
-    // Secrets/paired-device keys are stored separately by the gateway and never in this config.
-    remote: {
-      enabled: false,
-      host: '0.0.0.0',
-      port: 17860,
-      publicEndpoint: ''
-    },
     zoom: 1,
     fastWindowPosition: null,
     voiceList: [...defaultConfig.config.voiceList],
@@ -739,17 +715,6 @@ const rootDefaults = {
     }
   } catch {
     config.networkProxy = deepClone(rootDefaults.networkProxy)
-    changed = true
-  }
-
-  try {
-    const normalizedRemote = sanitizeRemoteSettingsForConfig(config.remote)
-    if (JSON.stringify(config.remote) !== JSON.stringify(normalizedRemote)) {
-      config.remote = normalizedRemote
-      changed = true
-    }
-  } catch {
-    config.remote = deepClone(rootDefaults.remote)
     changed = true
   }
 
@@ -1110,15 +1075,14 @@ async function readStoredConfigSnapshot() {
   const tasksPart = await readDocData(TASKS_DOC_ID, {})
   const localPart = await readDocData(getLocalConfigId(), {
     skillPath: '',
-    localChatPath: '',
-    remote: deepClone(defaultConfig.config.remote)
+    localChatPath: ''
   })
 
-  const mergedConfig = mergeLocalRemoteSettings(
-    ensureObject(baseConfigPart.config, {}),
-    localPart,
-    defaultConfig.config.remote
-  )
+  const mergedConfig = ensureObject(baseConfigPart.config, {})
+  // 远程网关已移除，历史配置里残留的 remote 字段直接丢弃。
+  if (mergedConfig.remote && typeof mergedConfig.remote === 'object') {
+    delete mergedConfig.remote
+  }
   mergedConfig.prompts = ensureObject(promptsPart, deepClone(defaultConfig.config.prompts))
   mergedConfig.providers = ensureObject(providersPart, deepClone(defaultConfig.config.providers))
   mergedConfig.mcpServers = ensureObject(mcpServersPart, {})
@@ -1268,26 +1232,16 @@ export async function saveSetting(keyPath, value) {
     }
   }
 
-  if (keyPath === 'skillPath' || keyPath === 'webdav.localChatPath' || keyPath === 'remote') {
+  if (keyPath === 'skillPath' || keyPath === 'webdav.localChatPath') {
     const localDoc = await readDocData(getLocalConfigId(), {
       skillPath: '',
-      localChatPath: '',
-      remote: deepClone(defaultConfig.config.remote)
+      localChatPath: ''
     })
 
     if (keyPath === 'skillPath') {
       localDoc.skillPath = normalizedValue || ''
     } else if (keyPath === 'webdav.localChatPath') {
       localDoc.localChatPath = normalizedValue || ''
-    } else {
-      try {
-        localDoc.remote = sanitizeRemoteSettingsForConfig(normalizedValue)
-      } catch (error) {
-        return {
-          success: false,
-          message: error?.message || 'remote_config_invalid'
-        }
-      }
     }
 
     const writeResult = await writeDocData(getLocalConfigId(), localDoc)
@@ -1360,13 +1314,7 @@ export async function updateConfigWithoutFeatures(newConfig) {
   const storedConfig = await readStoredConfigSnapshot()
   const previousMcpServers =
     storedConfig?.mcpServers && typeof storedConfig.mcpServers === 'object' ? deepClone(storedConfig.mcpServers) : {}
-  // Remote listener settings are local-machine-only and must not be overwritten by
-  // normal full-config saves or imported/shared config snapshots.
-  const nextConfig = preserveLocalRemoteSettings(
-    incomingConfig,
-    storedConfig,
-    defaultConfig.config.remote
-  )
+  const nextConfig = incomingConfig
 
   return persistConfigSnapshot(nextConfig, {
     previousMcpServers
@@ -1581,11 +1529,13 @@ export async function getUser() {
   }
 }
 
-export async function savePromptWindowSettings(promptKey, settings = {}) {  if (typeof promptKey !== 'string' || !promptKey.trim()) {
+export async function savePromptWindowSettings(promptKey, settings = {}) {
+  if (typeof promptKey !== 'string' || !promptKey.trim()) {
     const result = {
       success: false,
       message: 'promptKey is required'
-    }    return result
+    }
+    return result
   }
 
   const normalizedPromptKey = promptKey.trim()
