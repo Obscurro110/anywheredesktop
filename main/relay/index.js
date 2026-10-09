@@ -599,10 +599,7 @@ async function listPhoneConversations() {
       let promptKey = ''
       try {
         const opened = await openConversation({ dirPath, reference: c.id, activeOnly: true, pageSize: 1 })
-        promptKey =
-          opened?.sessionData?.promptKey ||
-          opened?.sessionData?.sessionMetadata?.promptKey ||
-          ''
+        promptKey = conversationPromptKey(opened?.sessionData)
       } catch (_) {}
       const p = promptsCfg && promptKey ? promptsCfg[promptKey] : null
       list.push({
@@ -733,10 +730,7 @@ async function readPhoneConversationMessages(conversationId) {
     })
   })
   messages.sort((a, b) => a.index - b.index)
-  const promptKey =
-      opened.sessionData?.promptKey ||
-      opened.sessionData?.sessionMetadata?.promptKey ||
-      ''
+  const promptKey = conversationPromptKey(opened.sessionData)
     let assistantName = ''
     try {
       const cRes = await ctx?.dataApi?.getConfig?.()
@@ -1073,6 +1067,33 @@ async function deletePhoneMessages(conversationId, storageIds) {
     }
   }
 
+/**
+ * 从会话的 sessionData 里取出「这个会话用的是哪个快捷助手」。
+ *
+ * ⚠️ 键名必须对得上：电脑端窗口落盘时把助手存成 **`CODE`**
+ * （见 `render/window/App.vue` 的 `getSessionDataAsObject()` → `CODE: CODE.value`），
+ * 旧数据里还可能叫 `promptKey`。
+ *
+ * 以前这里只读 `promptKey` / `sessionMetadata.promptKey`，两个都读不到就返回空，
+ * 调用方再兜底成全局的 `phonePromptKey` —— 于是**所有会话看起来都是同一个助手**，
+ * 用户在手机上「切换会话，助手不变」。本机数据库实测：
+ *   「英文翻译」     CODE = "翻译"
+ *   「亚马逊公司评价」CODE = "AI"
+ * 存储一直是好的，坏在读的那一头。
+ */
+function conversationPromptKey(sessionData) {
+  if (!sessionData || typeof sessionData !== 'object') return ''
+  const candidates = [
+    sessionData.CODE,
+    sessionData.promptKey,
+    sessionData.sessionMetadata?.promptKey
+  ]
+  for (const v of candidates) {
+    if (typeof v === 'string' && v.trim()) return v.trim()
+  }
+  return ''
+}
+
 async function openPhoneConversation(conversationId, relayTo, relayOpts = null) {
   const dirPath = await readChatDirPath()
   if (!dirPath) return { ok: false, reason: 'chat_dir_not_configured' }
@@ -1084,10 +1105,8 @@ async function openPhoneConversation(conversationId, relayTo, relayOpts = null) 
     return { ok: false, reason: 'conversation_not_found' }
   }
 
-  const promptKey =
-    opened.sessionData?.promptKey ||
-    opened.sessionData?.sessionMetadata?.promptKey ||
-    phonePromptKey
+  // 这个会话自己的助手（键名可能是 CODE，见 conversationPromptKey 的注释）
+  const promptKey = conversationPromptKey(opened.sessionData) || phonePromptKey
 
   // 已经为这个会话开过窗口就复用
   const reuseKey = `conv:${opened.descriptor.conversationId}`
@@ -1115,6 +1134,31 @@ async function openPhoneConversation(conversationId, relayTo, relayOpts = null) 
     }
   }
 
+
+  // ⚠️ 要开新窗口了 —— 先把「当前手机窗口」关掉。
+  //
+  // 以前只有 routePhoneChat（手机发消息）那条路径会先 destroy 旧窗口，
+  // conversation-open（手机点会话切换）这条**不关**：
+  //   · 切到别的会话时旧窗口留在屏幕上；
+  //   · 旧窗口还持有那个会话的写租约（每 5 秒心跳续期）；
+  //   · 来回切几次就攒出一堆窗口 —— 用户反馈的「电脑端打开了一堆重复的会话」。
+  // 手机同一时刻只在一个会话里，所以切换时关掉上一个手机窗口是正确的语义。
+  // 只关 relay 自己为手机开的那个；用户手动开的窗口不碰。
+  if (phoneWindowId && isWindowAlive(phoneWindowId)) {
+    try {
+      ctx.getWindowByRef(phoneWindowId)?.destroy?.()
+    } catch (err) {
+      rwarn('[relay] close previous phone window failed:', err?.message || err)
+    }
+    if (typeof phoneWindowKey === 'string' && phoneWindowKey.startsWith('conv:')) {
+      const prevConv = phoneWindowKey.slice(5)
+      if (prevConv !== opened.descriptor.conversationId && convWindows.get(prevConv) === phoneWindowId) {
+        convWindows.delete(prevConv)
+      }
+    }
+    phoneWindowId = null
+    phoneWindowKey = 'phone'
+  }
 
   const res = await ctx.openWindow('window', {
     code: promptKey,
@@ -1381,11 +1425,7 @@ async function findReusablePhoneConversationId(promptKey) {
         const opened = await openConversation({ dirPath, reference: id, activeOnly: true, pageSize: 1 })
         if (!opened?.ok) continue
         // 助手换了就别复用旧会话（配置追不回来），除非没传 promptKey
-        const samePrompt = String(
-          opened.sessionData?.promptKey ||
-          opened.sessionData?.sessionMetadata?.promptKey ||
-          ''
-        ) === String(promptKey || '')
+        const samePrompt = conversationPromptKey(opened.sessionData) === String(promptKey || '')
         if (samePrompt || !promptKey) {
           rlog('[relay] reuse phone conversation:', id, 'title =', c.title)
           return id
