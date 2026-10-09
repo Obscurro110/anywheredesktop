@@ -1181,8 +1181,8 @@ async function openPhoneConversation(conversationId, relayTo, relayOpts = null) 
   // 手机槽位当前停的那个」才复用 —— 手机在 A、B 之间来回切时，每次都会
   // 走「不复用 → 关旧窗 → 开新窗」，既慢又打断了另一个会话正在跑的生成。
   // 现在每个会话各有各的窗口，切回来直接复用，另一个会话不受影响。
-  const conversationId = opened.descriptor.conversationId
-  const existingWin = convWindows.get(conversationId)
+  const convId = opened.descriptor.conversationId
+  const existingWin = convWindows.get(convId)
   if (existingWin && isWindowAlive(existingWin)) {
     try {
       ctx.dispatchWindowEvent(
@@ -1201,8 +1201,8 @@ async function openPhoneConversation(conversationId, relayTo, relayOpts = null) 
         { getWindowByRef: ctx.getWindowByRef, listWindows: ctx.listWindows }
       )
       phoneWindowId = existingWin
-      phoneWindowKey = `conv:${conversationId}`
-      touchConvWindow(conversationId)
+      phoneWindowKey = `conv:${convId}`
+      touchConvWindow(convId)
       return { ok: true, windowId: existingWin, reused: true, title: opened.descriptor.title, promptKey }
     } catch (err) {
       rwarn('[relay] reuse conversation window failed:', err?.message || err)
@@ -1222,8 +1222,8 @@ async function openPhoneConversation(conversationId, relayTo, relayOpts = null) 
   //
   // 只关**同一个会话**上一次残留的窗口（复用失败走到这里的情况）。
   if (existingWin && !isWindowAlive(existingWin)) {
-    convWindows.delete(conversationId)
-    convWindowActivity.delete(conversationId)
+    convWindows.delete(convId)
+    convWindowActivity.delete(convId)
   }
   // 槽位如果还指着一个已死的窗口，顺手复位
   if (phoneWindowId && !isWindowAlive(phoneWindowId)) {
@@ -1251,10 +1251,10 @@ async function openPhoneConversation(conversationId, relayTo, relayOpts = null) 
 
   if (res?.ok && res.id) {
     phoneWindowId = res.id
-    phoneWindowKey = `conv:${conversationId}`
-    convWindows.set(conversationId, res.id)
-    touchConvWindow(conversationId)
-    rlog('[relay] opened conversation window:', res.id, 'conv =', conversationId, 'total =', convWindows.size)
+    phoneWindowKey = `conv:${convId}`
+    convWindows.set(convId, res.id)
+    touchConvWindow(convId)
+    rlog('[relay] opened conversation window:', res.id, 'conv =', convId, 'total =', convWindows.size)
         let assistantName = ''
     try {
       const cRes = await ctx?.dataApi?.getConfig?.()
