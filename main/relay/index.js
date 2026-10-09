@@ -56,7 +56,9 @@ import { listLocalConversations, openConversation } from '../core/conversationSt
 import {
   renameConversation as storeRenameConversation,
   deleteConversation as storeDeleteConversation,
-  deleteMessages as storeDeleteMessages
+  deleteMessages as storeDeleteMessages,
+  acquireWriteLease,
+  releaseWriteLease
 } from '../core/conversationStore.js'
 import { readLocalProjects } from '../core/projects.js'
 import { listSkills, getSkillDetails, deleteSkill } from '../core/skill.js'
@@ -897,6 +899,61 @@ function refreshDesktopConversationList() {
   }
 }
 
+/**
+ * 手机侧要删/改某个会话时，那个会话很可能**正被电脑端某个窗口编辑着**：
+ * 窗口打开会话时会 acquireWriteLease 并每 5 秒心跳续期（TTL 20s），
+ * 于是 relay 不带租约信息直接去写就抛 `conversation_write_lease_lost` ——
+ * 手机端看到的就是「点了没反应 / 这个会话被电脑端锁死了」。
+ *
+ * 这里在**首次失败后**用 force 抢占租约重试一次，用完立即释放：
+ *   · 正常情况下（没有窗口占用）走原路径，完全不打扰电脑端；
+ *   · 只有真冲突时才抢，此时原窗口下次心跳会失败、自己切只读并提示，
+ *     而「会话正在被手机删/改」本来就是它的正确结局。
+ */
+const RELAY_LEASE_HOLDER = `relay-${process.pid}`
+async function withConversationLeaseRetry(conversationId, run) {
+  try {
+    return await run({ holderInstanceId: '', leaseEpoch: null })
+  } catch (err) {
+    const msg = String(err?.message || err || '')
+    if (!msg.includes('conversation_write_lease_lost')) throw err
+    const dirPath = await readChatDirPath()
+    if (!dirPath) throw err
+    let lease = null
+    try {
+      lease = await acquireWriteLease({
+        dirPath,
+        conversationId,
+        holderInstanceId: RELAY_LEASE_HOLDER,
+        holderApp: 'relay',
+        force: true
+      })
+    } catch (e2) {
+      rwarn('[relay] force-acquire write lease failed:', e2?.message || e2)
+      throw err
+    }
+    if (!lease?.ok) throw err
+    rlog('[relay] took over write lease (window was holding it):', conversationId)
+    try {
+      return await run({
+        holderInstanceId: RELAY_LEASE_HOLDER,
+        leaseEpoch: lease.leaseEpoch
+      })
+    } finally {
+      try {
+        await releaseWriteLease({
+          dirPath,
+          conversationId,
+          holderInstanceId: RELAY_LEASE_HOLDER,
+          leaseEpoch: lease.leaseEpoch
+        })
+      } catch (e3) {
+        rwarn('[relay] release write lease failed:', e3?.message || e3)
+      }
+    }
+  }
+}
+
 /** 删除整个会话 */
 async function deletePhoneConversation(conversationId) {
   const dirPath = await readChatDirPath()
@@ -929,7 +986,9 @@ async function deletePhoneConversation(conversationId) {
   }
   convWindows.delete(ref)
 
-  const res = await storeDeleteConversation({ dirPath, conversationId: ref })
+  const res = await withConversationLeaseRetry(ref, ({ holderInstanceId, leaseEpoch }) =>
+    storeDeleteConversation({ dirPath, conversationId: ref, holderInstanceId, leaseEpoch })
+  )
   rlog('[relay] deleted conversation', ref, 'removed =', res?.removed)
   return { ok: res?.ok !== false, removed: !!res?.removed }
 }
@@ -942,7 +1001,9 @@ async function renamePhoneConversation(conversationId, title) {
   const next = String(title || '').trim()
   if (!ref) return { ok: false, reason: 'conversationId_required' }
   if (!next) return { ok: false, reason: 'title_required' }
-  await storeRenameConversation({ dirPath, conversationId: ref, title: next })
+  await withConversationLeaseRetry(ref, ({ holderInstanceId, leaseEpoch }) =>
+    storeRenameConversation({ dirPath, conversationId: ref, title: next, holderInstanceId, leaseEpoch })
+  )
   return { ok: true, title: next }
 }
 
@@ -952,7 +1013,9 @@ async function deletePhoneMessages(conversationId, storageIds) {
   if (!dirPath) return { ok: false, reason: 'chat_dir_not_configured' }
   const ids = (Array.isArray(storageIds) ? storageIds : []).map((x) => String(x)).filter(Boolean)
   if (!ids.length) return { ok: false, reason: 'storageIds_required' }
-  const res = await storeDeleteMessages({ dirPath, conversationId, storageIds: ids })
+  const res = await withConversationLeaseRetry(conversationId, ({ holderInstanceId, leaseEpoch }) =>
+    storeDeleteMessages({ dirPath, conversationId, storageIds: ids, holderInstanceId, leaseEpoch })
+  )
   // ⚠️ 回**真实**删除数，不能直接回 ids.length：
   // 之前哪怕一条都没删掉也报「已删除 N 条」，手机端显示成功，
   // 但重新打开会话消息又回来了 —— 用户以为「删了没反应」。
@@ -1010,7 +1073,7 @@ async function deletePhoneMessages(conversationId, storageIds) {
     }
   }
 
-async function openPhoneConversation(conversationId, relayTo) {
+async function openPhoneConversation(conversationId, relayTo, relayOpts = null) {
   const dirPath = await readChatDirPath()
   if (!dirPath) return { ok: false, reason: 'chat_dir_not_configured' }
   if (typeof ctx?.openWindow !== 'function') return { ok: false, reason: 'openWindow_unavailable' }
@@ -1033,7 +1096,14 @@ async function openPhoneConversation(conversationId, relayTo) {
       ctx.dispatchWindowEvent(
         {
           event: 'relay:incoming',
-          payload: { type: 'empty', payload: '', relayTo, __relayArmOnly: true },
+          payload: {
+            type: 'empty',
+            payload: '',
+            relayTo,
+            __relayArmOnly: true,
+            // 复用窗口也要把手机这次带来的参数带上，否则「切了模型没反应」
+            ...(relayOpts ? { __relayOptions: relayOpts } : {})
+          },
           target: phoneWindowId
         },
         { getWindowByRef: ctx.getWindowByRef, listWindows: ctx.listWindows }
@@ -1054,7 +1124,11 @@ async function openPhoneConversation(conversationId, relayTo) {
       descriptor: opened.descriptor,
       sessionData: opened.sessionData
     },
-    relayTo
+    relayTo,
+    // ⚠️ 参数必须**随开窗**一起给：窗口刚建好时 relay 再发 dispatchWindowEvent
+    // 有可能在渲染层就绪之前丢掉，那样这一轮用的还是电脑端旧设置 ——
+    // 用户看到的就是「手机上切了模型/MCP/Skill，电脑端毫无反应」。
+    ...(relayOpts ? { __relayOptions: relayOpts } : {})
   })
 
   if (res?.ok && res.id) {
@@ -2209,7 +2283,7 @@ async function routePhoneChat(msg) {
 
       let opened = null
       try {
-        opened = await openPhoneConversation(wantConvId, relayTo)
+        opened = await openPhoneConversation(wantConvId, relayTo, relayOpts)
       } catch (err) {
         rwarn('[relay] open conversation for phone message failed:', err?.message || err)
       }

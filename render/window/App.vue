@@ -7169,6 +7169,8 @@ const getSessionDataAsObject = (options = {}) => {
     pendingAppendBuffer: normalizePendingInputBuffer(pendingAppendBuffer.value),
     activeMcpServerIds: sessionMcpServerIds.value || [],
     activeSkillIds: sessionSkillIds.value || [],
+    // 思考预算也落盘（以前只在内存里，切窗口就丢）
+    reasoningEffort: tempReasoningEffort.value || 'default',
     isAutoApproveTools: isAutoApproveTools.value,
     taskList: taskList.value,
     conversationOwnerId: ensureConversationOwnerId(),
@@ -8544,6 +8546,15 @@ const loadSession = async (jsonData) => {
     } else {
       sessionSkillIds.value = [];
       tempSessionSkillIds.value = [];
+    }
+
+    // 思考预算跟着会话走：手机切过一次之后，换个窗口/重启也要保持住。
+    if (typeof jsonData.reasoningEffort === 'string' && jsonData.reasoningEffort) {
+      tempReasoningEffort.value = jsonData.reasoningEffort;
+    }
+    if (Array.isArray(jsonData.activeMcpServerIds)) {
+      sessionMcpServerIds.value = [...jsonData.activeMcpServerIds];
+      tempSessionMcpServerIds.value = [...jsonData.activeMcpServerIds];
     }
 
     if (chat_show.value && chat_show.value.length > 0) {
@@ -10929,10 +10940,67 @@ const settleRelayReply = () => {
   }
 };
 
+// 手机传来的运行参数（模型 / 思考预算 / MCP / Skill / 压缩）
+//
+// ⚠️ 必须能被**两处**调用：
+//   1) onWindowEvent —— 窗口已存在、后续消息；
+//   2) onWindowInit  —— 刚为某个会话新开的窗口。
+// 以前只有 (1)，于是「新开/切换会话后的第一条消息」参数根本没机会应用，
+// 用户看到的就是「手机上切了模型/MCP/Skill，电脑端毫无反应」。
+const applyRelayOptions = (opts) => {
+  if (!opts || typeof opts !== 'object') return;
+  relayLog('[relay] applying options:', JSON.stringify(opts));
+  try {
+    if (typeof opts.model === 'string' && opts.model && opts.model !== model.value) {
+      handleChangeModel(opts.model);
+      // 记到会话上：模型属于会话，重启/换窗口后也要保持
+      pendingRelaySessionSync = true;
+    }
+    if (typeof opts.reasoningEffort === 'string' && opts.reasoningEffort) {
+      tempReasoningEffort.value = opts.reasoningEffort;
+      // 思考预算以前只放在临时变量里，不落盘 —— 换个窗口就丢。
+      pendingRelaySessionSync = true;
+    }
+    if (Array.isArray(opts.mcp)) {
+      sessionMcpServerIds.value = [...opts.mcp];
+      tempSessionMcpServerIds.value = [...opts.mcp];
+      pendingRelaySessionSync = true;
+    }
+    if (Array.isArray(opts.skills)) {
+      applyNormalizedSkillSelection(opts.skills);
+      pendingRelaySessionSync = true;
+    }
+  } catch (err) {
+    relayWarn('[relay] apply options failed:', err);
+  }
+};
+
+// 手机改过参数 → 触发一次会话落盘，让模型/MCP/Skill/思考预算
+// 真正写进会话本身（和电脑端手动改的行为一致）。
+let pendingRelaySessionSync = false;
+const scheduleRelaySessionSync = () => {
+  if (!pendingRelaySessionSync) return;
+  pendingRelaySessionSync = false;
+  setTimeout(() => {
+    try { autoSaveSession(true); } catch (err) {
+      relayWarn('[relay] session sync after options failed:', err);
+    }
+  }, 600);
+};
+
 // 窗口初始化载荷里带 relayTo（主进程刚为手机开的窗口）
 window.api?.onWindowInit?.((data) => {
   relayLog('[relay] window init, relayTo =', data?.relayTo);
   armRelayReply(data?.relayTo);
+  // 新开的窗口也要立刻应用手机带来的参数，否则这一轮用的是电脑端旧设置。
+  // 延后一点等 bootstrap（技能列表等）就绪，避免技能被归一化掉。
+  const initOpts = data?.__relayOptions;
+  if (initOpts) {
+    setTimeout(() => {
+      applyRelayOptions(initOpts);
+      scheduleRelaySessionSync();
+    }, 800);
+  }
 });
 
 // 窗口事件里带 relayTo（窗口已存在、后续消息）
@@ -10961,27 +11029,8 @@ window.api?.onWindowEvent?.((env) => {
     }
   }
   // 手机传来的运行参数（模型 / 思考预算 / MCP / Skill / 压缩）
-  const opts = p?.__relayOptions;
-  if (opts && typeof opts === 'object') {
-    relayLog('[relay] applying options:', JSON.stringify(opts));
-    try {
-      if (typeof opts.model === 'string' && opts.model && opts.model !== model.value) {
-        handleChangeModel(opts.model);
-      }
-      if (typeof opts.reasoningEffort === 'string' && opts.reasoningEffort) {
-        tempReasoningEffort.value = opts.reasoningEffort;
-      }
-      if (Array.isArray(opts.mcp)) {
-        sessionMcpServerIds.value = [...opts.mcp];
-        tempSessionMcpServerIds.value = [...opts.mcp];
-      }
-      if (Array.isArray(opts.skills)) {
-        applyNormalizedSkillSelection(opts.skills);
-      }
-    } catch (err) {
-      relayWarn('[relay] apply options failed:', err);
-    }
-  }
+  applyRelayOptions(p?.__relayOptions);
+  scheduleRelaySessionSync();
 });
 
 // ---------------------------------------------------------------------------
