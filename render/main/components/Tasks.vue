@@ -171,12 +171,18 @@ onDeactivated(() => {
     window.removeEventListener('keydown', handleGlobalKeyDown);
 });
 
-watch(() => currentConfig.value?.tasks, (newTasks) => {
-    if (newTasks && !activeTaskId.value) {
-        const taskIds = Object.keys(newTasks);
-        if (taskIds.length > 0) {
-            activeTaskId.value = taskIds[0];
-        }
+watch(() => currentConfig.value?.tasks, (newTasks, oldTasks) => {
+    const ids = Object.keys(newTasks || {});
+    const prev = new Set(Object.keys(oldTasks || {}));
+    const added = ids.filter((id) => !prev.has(id));
+    if (added.length > 0) {
+        activeTaskId.value = added[added.length - 1];
+        return;
+    }
+    if (activeTaskId.value && newTasks && !newTasks[activeTaskId.value]) {
+        activeTaskId.value = ids[0] || null;
+    } else if (!activeTaskId.value && ids.length > 0) {
+        activeTaskId.value = ids[0];
     }
 }, { deep: true });
 

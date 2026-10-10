@@ -886,6 +886,14 @@ onMounted(async () => {
     }
   });
 
+  // 手机新建/修改定时任务会直接改配置。主窗口以前只在启动时读一次，
+  // 所以任务页一直停在旧列表上，看起来像「电脑端没反应」。
+  window.api?.onConfigUpdated?.((next) => {
+    if (!next || typeof next !== 'object') return;
+    config.value = normalizeConfigPayload({ config: next });
+    applyDocumentTheme(resolveDocumentDarkMode(config.value));
+  });
+
   window.addEventListener('keydown', handleGlobalEsc, true);
   mediaQuery.addEventListener('change', handleSystemThemeChange);
   try {

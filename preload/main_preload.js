@@ -340,6 +340,11 @@ getDroppedFilePath: (file) => {
   onAlwaysOnTopChanged: (callback) => {
     if (typeof callback !== 'function') return
     electronAPI.ipcRenderer.on('window:alwaysOnTopChanged', (_event, payload) => callback(payload))
+  },
+  onConfigUpdated: (callback) => {
+    if (typeof callback !== 'function') return
+    electronAPI.ipcRenderer.on('window:configUpdated', (_event, newConfig) => callback(newConfig))
+    electronAPI.ipcRenderer.on('config-updated', (_event, newConfig) => callback(newConfig))
   }
 }
 
