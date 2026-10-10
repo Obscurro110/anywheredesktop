@@ -792,6 +792,16 @@ const handleRelayCommand = async (cmd) => {
   }
 
   try {
+    if (action === 'cancel') {
+      if (!loading.value) {
+        reply(false, { reason: 'not_generating' });
+        return;
+      }
+      cancelAskAI();
+      reply(true);
+      return;
+    }
+
     if (action === 'reask') {
       // 电脑端要求传 assistant 消息 id
       const requestedId = String(cmd.messageId ?? '');

@@ -1160,6 +1160,16 @@ function conversationPromptKey(sessionData) {
   return ''
 }
 
+/** 会话实际在用的模型。优先会话自己存的，没有才退回助手预设。 */
+function conversationModel(sessionData) {
+  if (!sessionData || typeof sessionData !== 'object') return ''
+  if (typeof sessionData.model === 'string' && sessionData.model.trim()) {
+    return sessionData.model.trim()
+  }
+  const preset = sessionData.currentPromptConfig?.model
+  return typeof preset === 'string' ? preset.trim() : ''
+}
+
 async function openPhoneConversation(conversationId, relayTo, relayOpts = null) {
   const dirPath = await readChatDirPath()
   if (!dirPath) return { ok: false, reason: 'chat_dir_not_configured' }
@@ -1173,6 +1183,7 @@ async function openPhoneConversation(conversationId, relayTo, relayOpts = null) 
 
   // 这个会话自己的助手（键名可能是 CODE，见 conversationPromptKey 的注释）
   const promptKey = conversationPromptKey(opened.sessionData) || phonePromptKey
+  const model = conversationModel(opened.sessionData)
 
   // 已经为这个会话开过窗口就复用。
   //
@@ -1203,7 +1214,7 @@ async function openPhoneConversation(conversationId, relayTo, relayOpts = null) 
       phoneWindowId = existingWin
       phoneWindowKey = `conv:${convId}`
       touchConvWindow(convId)
-      return { ok: true, windowId: existingWin, reused: true, title: opened.descriptor.title, promptKey }
+      return { ok: true, windowId: existingWin, reused: true, title: opened.descriptor.title, promptKey, model }
     } catch (err) {
       rwarn('[relay] reuse conversation window failed:', err?.message || err)
     }
@@ -1267,7 +1278,8 @@ async function openPhoneConversation(conversationId, relayTo, relayOpts = null) 
       windowId: res.id,
       title: opened.descriptor.title,
       promptKey,
-      assistantName
+      assistantName,
+      model
     }
   }
   rwarn('[relay] openWindow for conversation returned:', res)
@@ -1627,6 +1639,7 @@ async function routePhoneChat(msg) {
             title: res.title || '',
             promptKey: res.promptKey || '',
             assistantName: res.assistantName || '',
+            model: res.model || '',
             reused: !!res.reused
           }
         }),
