@@ -438,6 +438,7 @@ async function readCapabilities() {
         // 下面这些是手机端「编辑任务」要回填的完整配置
         intervalMinutes: Number(task.intervalMinutes) || 60,
         intervalStartTime: task.intervalStartTime || '00:00',
+        intervalTimeRanges: Array.isArray(task.intervalTimeRanges) ? task.intervalTimeRanges : [],
         dailyTime: task.dailyTime || '12:00',
         weeklyDays: Array.isArray(task.weeklyDays) ? task.weeklyDays : [],
         weeklyTime: task.weeklyTime || '12:00',
@@ -445,6 +446,11 @@ async function readCapabilities() {
         monthlyTime: task.monthlyTime || '12:00',
         singleDate: task.singleDate || '',
         singleTime: task.singleTime || '12:00',
+        extraMcp: Array.isArray(task.extraMcp) ? task.extraMcp : [],
+        extraSkills: Array.isArray(task.extraSkills) ? task.extraSkills : [],
+        autoSave: task.autoSave !== false,
+        autoSaveProjectId: task.autoSaveProjectId || '',
+        autoClose: task.autoClose === true,
         historyCount: Array.isArray(task.history) ? task.history.length : 0
       })
     }
@@ -586,6 +592,20 @@ async function runTaskOnDesktop(taskId) {
  * 读取电脑端的「本地会话目录」。
  * 电脑端把它存在 config.webdav.localChatPath（主界面「对话」页用的同一路径）。
  */
+async function listTaskProjects() {
+  try {
+    const dirPath = await readChatDirPath()
+    if (!dirPath) return []
+    const data = await readLocalProjects(dirPath)
+    return (Array.isArray(data?.projects) ? data.projects : [])
+      .filter((p) => p && typeof p === 'object' && p.id)
+      .map((p) => ({ id: String(p.id), name: String(p.name || p.id) }))
+  } catch (err) {
+    rwarn('[relay] list task projects failed:', err?.message || err)
+    return []
+  }
+}
+
 async function readChatDirPath() {
   const res = await ctx?.dataApi?.getConfig?.()
   const cfg = res?.config && typeof res.config === 'object' ? res.config : {}
@@ -1561,7 +1581,8 @@ async function routePhoneChat(msg) {
   if (role === 'tasks-request') {
     try {
       const caps = await readCapabilities()
-      relay?.sendChat(JSON.stringify({ __relayTasks: caps.tasks || [], desktopVersion: caps.desktopVersion }), {
+      const projects = await listTaskProjects()
+      relay?.sendChat(JSON.stringify({ __relayTasks: caps.tasks || [], projects, desktopVersion: caps.desktopVersion }), {
         role: 'tasks',
         to
       })
@@ -1979,8 +2000,10 @@ async function routePhoneChat(msg) {
 
     // 回执里带上最新的任务列表，手机端不用再单独拉一次
     let tasks = []
+    let projects = []
     try {
       tasks = (await readCapabilities()).tasks || []
+      projects = await listTaskProjects()
     } catch (_) {}
 
     relay?.sendChat(
@@ -1994,7 +2017,8 @@ async function routePhoneChat(msg) {
           enabled: res?.enabled,
           reason: res?.reason || ''
         },
-        __relayTasks: tasks
+        __relayTasks: tasks,
+        projects
       }),
       { role: 'task-manage-result', to }
     )
