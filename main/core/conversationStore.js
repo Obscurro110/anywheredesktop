@@ -41,7 +41,14 @@ async function isLegacyConversationJson(filePath, fileSize = 0) {
 }
 
 
-const nowIso = () => new Date().toISOString()
+function safeParseJson(raw, fallback = null) {
+  if (typeof raw !== 'string') return fallback
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return fallback
+  }
+}
 const clone = (value) => JSON.parse(JSON.stringify(value ?? null))
 const normalizeText = (value, fallback = '') => typeof value === 'string' ? value : (value == null ? fallback : String(value))
 const normalizeBasename = (value = '') => path.basename(normalizeText(value).trim())
@@ -612,7 +619,8 @@ function syncMessagesIncrementally(db, messages, lowerBound = 1) {
   for (const message of messages) {
     const existing = existingById.get(message.storageId)
     if (existing) {
-      const storedPayload = hydrateAttachments(db, JSON.parse(existing.payload_json))
+      const parsedStored = safeParseJson(existing.payload_json, {})
+      const storedPayload = hydrateAttachments(db, parsedStored)
       const nextPayload = stripMessageStorageMetadata(message)
       const nextRole = ['system', 'user', 'assistant', 'tool', 'compaction'].includes(nextPayload.role) ? nextPayload.role : 'user'
       if (existing.role_code === nextRole && JSON.stringify(storedPayload) === JSON.stringify(nextPayload)) continue
