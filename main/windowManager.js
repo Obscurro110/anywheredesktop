@@ -14,10 +14,11 @@ const __dirname = path.dirname(__filename)
 
 const MAIN_WINDOW_DARK_BACKGROUND = '#17171c'
 const MAIN_WINDOW_LIGHT_BACKGROUND = '#fffdf7'
-const BLOCKED_EXTERNAL_PROTOCOLS = new Set(['javascript:', 'data:', 'blob:', 'about:'])
+// 安全：外部 URL 只允许 http/https/mailto 协议白名单，阻断 file:、ms-msdt:、search-ms: 等系统唤起与执行风险
+const ALLOWED_EXTERNAL_PROTOCOLS = new Set(['http:', 'https:', 'mailto:'])
 
-function isBlockedExternalProtocol(protocol = '') {
-  return BLOCKED_EXTERNAL_PROTOCOLS.has(String(protocol || '').toLowerCase())
+function isAllowedExternalProtocol(protocol = '') {
+  return ALLOWED_EXTERNAL_PROTOCOLS.has(String(protocol || '').toLowerCase())
 }
 
 
@@ -63,23 +64,14 @@ async function openUrlWithSystemDefault(url = '') {
 
   try {
     const parsedUrl = new URL(normalizedUrl)
-    if (isBlockedExternalProtocol(parsedUrl.protocol)) {
-      console.warn('[windowManager] Blocked external url with unsafe protocol:', parsedUrl.protocol)
+    if (!isAllowedExternalProtocol(parsedUrl.protocol)) {
+      console.warn('[windowManager] Blocked external url with disallowed protocol:', parsedUrl.protocol)
       return
     }
-    if (parsedUrl.protocol === 'file:') {
-      const localPath = fileURLToPath(parsedUrl)
-      const message = await shell.openPath(localPath)
-      if (message) {
-        console.warn('[windowManager] Failed to open local file:', message, localPath)
-      }
-      return
-    }
-  } catch {
-    // Non-standard urls are still passed to openExternal below.
+    await shell.openExternal(parsedUrl.toString())
+  } catch (err) {
+    console.warn('[windowManager] Failed to parse or open external url:', err?.message || err)
   }
-
-  await shell.openExternal(normalizedUrl)
 }
 
 
@@ -865,7 +857,7 @@ function createBrowserWindow(type, config, titleSuffix = '', windowRef = '', ini
     webPreferences: {
       preload: resolvePreloadFile(config.preload),
       sandbox: false,
-      contextIsolation: false,
+      contextIsolation: true,
       nodeIntegration: false
     },
     ...config.options

@@ -240,8 +240,9 @@ export class RelayClient extends EventEmitter {
     const fname = name || filePath.split(/[\\/]/).pop();
     const buf = await readFile(filePath);
     const res = await httpRequest(
-      `${base}/upload?token=${encodeURIComponent(this.token)}&name=${encodeURIComponent(fname)}`,
+      `${base}/upload?name=${encodeURIComponent(fname)}`,
       buf,
+      { 'Authorization': `Bearer ${this.token}` }
     );
     const json = JSON.parse(res);
     if (!json.ok) throw new Error('upload failed: ' + res);
@@ -259,7 +260,9 @@ export class RelayClient extends EventEmitter {
   /** Download a relayed file to a local path. */
   async downloadFile(fileId, savePath) {
     const base = this._httpBase();
-    const buf = await httpGet(`${base}/file/${fileId}?token=${encodeURIComponent(this.token)}`);
+    const buf = await httpGet(`${base}/file/${fileId}`, {
+      headers: { 'Authorization': `Bearer ${this.token}` }
+    });
     const { writeFile } = await import('node:fs/promises');
     await writeFile(savePath, buf);
     return savePath;
@@ -295,12 +298,16 @@ export class RelayClient extends EventEmitter {
 // 手机那边就永远停在「发送中」。
 const HTTP_TIMEOUT_MS = 3 * 60 * 1000;
 
-function httpRequest(url, body) {
+function httpRequest(url, body, headers = {}) {
   return new Promise((resolve, reject) => {
     const transport = new URL(url).protocol === 'https:' ? https : http;
     const req = transport.request(
       url,
-      { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, timeout: HTTP_TIMEOUT_MS },
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/octet-stream', ...headers },
+        timeout: HTTP_TIMEOUT_MS
+      },
       (res) => {
         let data = '';
         res.on('data', (c) => (data += c));
@@ -316,10 +323,10 @@ function httpRequest(url, body) {
   });
 }
 
-function httpGet(url) {
+function httpGet(url, options = {}) {
   return new Promise((resolve, reject) => {
     const transport = new URL(url).protocol === 'https:' ? https : http;
-    const req = transport.get(url, { timeout: HTTP_TIMEOUT_MS }, (res) => {
+    const req = transport.get(url, { timeout: HTTP_TIMEOUT_MS, ...options }, (res) => {
       if (res.statusCode !== 200) {
         res.resume();
         reject(new Error(`download failed ${res.statusCode}`));

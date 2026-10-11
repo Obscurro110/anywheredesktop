@@ -7,10 +7,10 @@ import { fileURLToPath } from 'node:url'
 
 const execFileAsync = promisify(execFile)
 
-const BLOCKED_EXTERNAL_PROTOCOLS = new Set(['javascript:', 'data:', 'blob:', 'about:'])
+const ALLOWED_EXTERNAL_PROTOCOLS = new Set(['http:', 'https:', 'mailto:'])
 
-function isBlockedExternalProtocol(protocol = '') {
-  return BLOCKED_EXTERNAL_PROTOCOLS.has(String(protocol || '').toLowerCase())
+function isAllowedExternalProtocol(protocol = '') {
+  return ALLOWED_EXTERNAL_PROTOCOLS.has(String(protocol || '').toLowerCase())
 }
 
 
@@ -1253,27 +1253,22 @@ export async function shellOpenExternal(url = '') {
 
   try {
     const parsedUrl = new URL(normalizedUrl)
-    if (isBlockedExternalProtocol(parsedUrl.protocol)) {
+    if (!isAllowedExternalProtocol(parsedUrl.protocol)) {
       return {
         ok: false,
-        reason: 'blocked_protocol'
+        reason: 'disallowed_protocol'
       }
     }
-    if (parsedUrl.protocol === 'file:') {
-      const localPath = fileURLToPath(parsedUrl)
-      const message = await shell.openPath(localPath)
-      return {
-        ok: message === '',
-        message: message || null
-      }
+    await shell.openExternal(parsedUrl.toString())
+    return {
+      ok: true
     }
-  } catch {
-    // Non-standard urls are passed to openExternal below.
-  }
-
-  await shell.openExternal(normalizedUrl)
-  return {
-    ok: true
+  } catch (error) {
+    return {
+      ok: false,
+      reason: 'invalid_url',
+      message: error?.message || String(error)
+    }
   }
 }
 
