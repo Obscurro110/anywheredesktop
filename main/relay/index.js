@@ -451,6 +451,7 @@ async function readCapabilities() {
         autoSave: task.autoSave !== false,
         autoSaveProjectId: task.autoSaveProjectId || '',
         autoClose: task.autoClose === true,
+        appliedDevices: applied,
         historyCount: Array.isArray(task.history) ? task.history.length : 0
       })
     }
@@ -1201,9 +1202,10 @@ function conversationModel(sessionData) {
  * 渲染层再经 window:conversationStatus 持续更新），通过 listWindows('window')
  * 能读到。这里反查一次，命中就接管复用，不再另开。
  */
-function findOpenWindowForConversation(conversationId) {
+function findOpenWindowForConversation(conversationId, title = '') {
   const cid = String(conversationId || '').trim()
-  if (!cid || typeof ctx?.listWindows !== 'function') return null
+  const trimmedTitle = String(title || '').trim()
+  if ((!cid && !trimmedTitle) || typeof ctx?.listWindows !== 'function') return null
   let items = []
   try {
     items = ctx.listWindows('window') || []
@@ -1212,8 +1214,15 @@ function findOpenWindowForConversation(conversationId) {
   }
   for (const item of items) {
     if (!item || item.type !== 'window') continue
-    if (String(item.conversationId || '').trim() !== cid) continue
-    if (typeof item.id === 'string' && isWindowAlive(item.id)) return item.id
+    const itemCid = String(item.conversationId || '').trim()
+    const itemTitle = String(item.conversationTitle || '').trim()
+    // 匹配规则：ID 相等，或者 ID 包含，或者标题完全匹配已有打开窗口
+    const matched = (cid && itemCid === cid) ||
+      (cid && itemCid && (itemCid.includes(cid) || cid.includes(itemCid))) ||
+      (trimmedTitle && itemTitle && itemTitle === trimmedTitle)
+    if (matched && typeof item.id === 'string' && isWindowAlive(item.id)) {
+      return item.id
+    }
   }
   return null
 }
@@ -1245,7 +1254,7 @@ async function openPhoneConversation(conversationId, relayTo, relayOpts = null) 
   // convWindows 只认得 relay 开过的窗口。电脑端自己先打开的会话窗口不在里面，
   // 这里按 conversationId 反查当前活着的窗口，命中就接管，避免重复开窗。
   if ((!existingWin || !isWindowAlive(existingWin)) && convId) {
-    const adopted = findOpenWindowForConversation(convId)
+    const adopted = findOpenWindowForConversation(convId, opened.descriptor.title)
     if (adopted) {
       existingWin = adopted
       convWindows.set(convId, adopted)
@@ -1254,6 +1263,15 @@ async function openPhoneConversation(conversationId, relayTo, relayOpts = null) 
   }
   if (existingWin && isWindowAlive(existingWin)) {
     try {
+      // 唤起该窗口到前台，避免用户在电脑端看不到响应以为卡住
+      const win = ctx.getWindowByRef(existingWin)
+      if (win && !win.isDestroyed()) {
+        try {
+          if (win.isMinimized?.()) win.restore?.()
+          win.show?.()
+          win.focus?.()
+        } catch {}
+      }
       ctx.dispatchWindowEvent(
         {
           event: 'relay:incoming',
@@ -1452,7 +1470,7 @@ const TASK_WRITABLE_KEYS = new Set([
   'monthlyDays', 'monthlyTime',
   'singleDate', 'singleTime',
   'promptKey', 'modelRoute', 'extraMcp', 'extraSkills',
-  'autoSave', 'autoSaveProjectId', 'autoClose'
+  'autoSave', 'autoSaveProjectId', 'autoClose', 'appliedDevices'
 ])
 
 async function updatePhoneTask(taskId, patch) {

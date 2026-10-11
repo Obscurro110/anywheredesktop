@@ -471,7 +471,8 @@ function resolvePromptDisplayName(payload = null, promptCode = '__DEFAULT__') {
 
 function normalizeConversationMetadataId(value = '') {
   const normalized = typeof value === 'string' ? value.trim() : ''
-  if (!/^[A-Za-z0-9._:-]{16,160}$/.test(normalized)) return ''
+  // 容纳各类会话 ID、包括中文/特殊字符历史文件名及 sqlite uuid
+  if (normalized.length < 1 || normalized.length > 260) return ''
   return normalized
 }
 
