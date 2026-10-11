@@ -41,6 +41,8 @@ async function isLegacyConversationJson(filePath, fileSize = 0) {
 }
 
 
+const nowIso = () => new Date().toISOString()
+
 function safeParseJson(raw, fallback = null) {
   if (typeof raw !== 'string') return fallback
   try {
